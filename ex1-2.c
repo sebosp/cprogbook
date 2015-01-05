@@ -1,7 +1,7 @@
 #include <stdio.h>
 // Experiment to find out what happens when printf argument string contains back-slash escapes.
 // Used: perl -e 'print "#include <stdio.h>\nmain(){\n";foreach (a..z){print "\tprintf(\"\\$_\");\n"};print "}"' > ex1-2.c 
-main(){
+int main(int argc, char *argv[]){
 	printf("\a");
 	printf("\b");
 	printf("\c");
@@ -28,4 +28,5 @@ main(){
 	printf("\x");
 	printf("\y");
 	printf("\z");
+	return 0;
 }

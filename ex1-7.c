@@ -1,5 +1,6 @@
 #include <stdio.h>
 // print the value of EOF
-main(){
+int main(int argc, char *argv[]){
 	printf("EOF = %i\n",EOF);
+	return 0;
 }

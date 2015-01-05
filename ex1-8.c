@@ -1,6 +1,6 @@
 #include <stdio.h>
 // Is getchar() != EOF is 0 or 1.
-main(){
+int main(int argc, char *argv[]){
 	int c,tabs,spaces,newlines,others;
 	c=tabs=spaces=newlines=others = 0;
 	while((c = getchar()) != EOF){
@@ -15,4 +15,5 @@ main(){
 		}
 	}
 	printf("Tabs: %i, spaces: %i, new-lines: %i, others: %i\n",tabs,spaces,newlines,others);
+	return 0;
 }

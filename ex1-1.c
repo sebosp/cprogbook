@@ -1,6 +1,7 @@
 #include <stdio.h>
 // Run the hello wordl, remove stuff and see how it fails.
 
-main(){
+int main(int argc, char *argv[]){
 	printf("Hello world\n");
+	return 0;
 }

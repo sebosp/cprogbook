@@ -1,6 +1,6 @@
 #include <stdio.h>
 // Celsius to fahrenheit
-main(){
+int main(int argc, char *argv[]){
 	float fahr, celsius;
 	int lower, upper, step;
 	lower = 0;
@@ -13,4 +13,5 @@ main(){
 		printf("%3.0f\t%6.1f\n",celsius,fahr);
 		fahr=fahr+step;
 	}
+	return 0;
 }
