@@ -14,10 +14,10 @@ int main(int argc, char *argv[]){
 	printf("character frequency:");
 	for(i = 0; i < '~'-'!'; ++i)
 		if(cfreq[i]){
-			printf("%c:",i);
+			printf("%c:",i+'!');
 			for(j=0;j<cfreq[i];j++)
 				printf(".");
+			printf("\n");
 		}
-	printf("\n");
 	return 0;
 }
