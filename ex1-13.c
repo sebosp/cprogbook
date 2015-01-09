@@ -1,6 +1,6 @@
 #include <stdio.h>
 #define MAXLENGTH 100
-// Separate by printable chars.
+// word length frequency "bars"
 int main(int argc, char *argv[]){
 	int c;
 	int wlengths[MAXLENGTH];
