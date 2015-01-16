@@ -1,16 +1,15 @@
 #include <stdio.h>
-#define MAXLINECHARS 500
+#define MAXLINECHARS 1000000
+#define MAXPRINTCHARS 80
 
 int getlittleline(char line[]);
 
 int main(int argc, char *argv[]){
 	int len;
 	char line[MAXLINECHARS];
-	int linenum=0;
 	while((len = getlittleline(line)) > 0){
-		++linenum;
-		if(len == MAXLINECHARS - 1){
-			printf("Line %d cut at %d max characters. First 100 chars: %.100s\n",linenum,MAXLINECHARS,line);
+		if(len > MAXPRINTCHARS - 1){
+			printf("%s\n",line);
 		}
 	}
 	return 0;
