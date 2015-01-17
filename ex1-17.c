@@ -9,7 +9,7 @@ int main(int argc, char *argv[]){
 	char line[MAXLINECHARS];
 	while((len = getlittleline(line)) > 0){
 		if(len > MAXPRINTCHARS - 1){
-			printf("%s\n",line);
+			printf("%s",line);
 		}
 	}
 	return 0;
@@ -20,7 +20,7 @@ int getlittleline(char line[]){
 	for(idx=0;idx < MAXLINECHARS - 1 && (cinput = getchar()) != EOF && cinput != '\n'; idx++)
 		line[idx]=cinput;
 	if(cinput == '\n'){
-		line[++idx]='\n';
+		line[idx++]='\n';
 	}
 	line[idx] = '\0';
 	return idx;

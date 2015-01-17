@@ -21,7 +21,7 @@ int getlittleline(char line[]){
 	for(idx=0;idx < MAXLINECHARS - 1 && (cinput = getchar()) != EOF && cinput != '\n'; idx++)
 		line[idx]=cinput;
 	if(cinput == '\n'){
-		line[++idx]='\n';
+		line[idx++] = cinput;
 	}
 	line[idx] = '\0';
 	return idx;
