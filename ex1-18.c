@@ -7,7 +7,7 @@ int getlittleline(char line[]);
 int main(int argc, char *argv[]){
 	int len;
 	char line[MAXLINECHARS];
-	while((len = getlittleline(line)) > 0){
+	while((len = getlittleline(line)) > 1){
 		printf("%s",line);
 	}
 	return 0;
