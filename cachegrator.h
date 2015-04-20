@@ -276,7 +276,7 @@ init_stat_type(char stat_type_name[])
 	new_stat_type->color.blue = 0.0;
 	new_stat_type->draw_style = GL_TRIANGLES;
 	new_stat_type->div_id = 0;
-	new_stat_type->area = 0.05;
+	new_stat_type->area = 0.025;
 	new_stat_type->z = 0.0;
 	return new_stat_type;
 }
@@ -383,31 +383,8 @@ add_target_stat_value(struct wl_list *target_list,
 	return 0;
 }
 
-static int
-data_point_size(GLenum mode)
-{
-	switch(mode){
-		case GL_POINTS:
-			return 1;
-		case GL_LINE_STRIP:
-			return 2;
-		case GL_LINE_LOOP:
-			return 2;
-		case GL_LINES:
-			return 2;
-		case GL_TRIANGLE_STRIP:
-			return 1;
-		case GL_TRIANGLE_FAN:
-			return 1;
-		case GL_TRIANGLES:
-		default:
-			return 1;
-	}
-	return 0;
-}
-
 static void
-target_list_stats(int *num_vertices, struct wl_list *target_list,
+target_list_stats(int *num_verts, struct wl_list *target_list,
 		  long *min_epoch,
 		  long *max_epoch,
 		  unsigned long long int *min_value,
@@ -416,18 +393,16 @@ target_list_stats(int *num_vertices, struct wl_list *target_list,
 {
 	struct target_stats_t *target_loc;
 	struct target_stat_types_t *stat_type_loc;
-	*num_vertices = 0;
+	*num_verts = 0;
 	*min_epoch = LONG_MAX;
 	*min_value = ULONG_MAX;
 	*max_epoch = 0;
 	*max_value = 0;
-	int draw_type_point_size = data_point_size(mode);
 	wl_list_for_each(target_loc, target_list, link){
 		wl_list_for_each(stat_type_loc, &target_loc->types.link, link){
 			if(!stat_type_loc->enabled ||
 			   stat_type_loc->div_id != div_id)
 				continue;
-			*num_vertices += draw_type_point_size * 3; /* XYZ */
 			if(*max_value < stat_type_loc->max_value)
 				*max_value = stat_type_loc->max_value;
 			if(*min_value > stat_type_loc->min_value)
@@ -436,6 +411,8 @@ target_list_stats(int *num_vertices, struct wl_list *target_list,
 				*max_epoch = stat_type_loc->max_epoch;
 			if(*min_epoch > stat_type_loc->min_epoch)
 				*min_epoch = stat_type_loc->min_epoch;
+			*num_verts += 3 * 
+				wl_list_length(&stat_type_loc->values.link);
 		}
 	}
 }
@@ -451,8 +428,10 @@ gen_stats_vtx_trgl_data(struct wl_list *target_list,
 			unsigned long long int max_value,
 			int div_id)
 {
+	if(num_vertices == 0)
+		return;
 	int cur_vtx = 0;
-	int i,j;
+	int i;
 	GLfloat x, y;
 	if(min_value > 0)
 		min_epoch--;
@@ -511,15 +490,15 @@ gen_stats_vtx_trgl_data(struct wl_list *target_list,
 				pos[cur_vtx    ][2] = 0;
 				pos[cur_vtx + 1][2] = 0;
 				pos[cur_vtx + 2][2] = 0;
-				/* Bottom right */
+				/* Bottom left */
 				pos[cur_vtx    ][0] = -1 * stat_type->area + x;
 				pos[cur_vtx    ][1] = -1 * stat_type->area + y;
 				/* Bottom right */
 				pos[cur_vtx + 1][0] = stat_type->area + x;
-				pos[cur_vtx + 1][1] = -1 * stat_type->area + x;
+				pos[cur_vtx + 1][1] = -1 * stat_type->area + y;
 				/* Top center */
-				pos[cur_vtx + 2][0] = stat_type->area + x;
-				pos[cur_vtx + 2][1] = stat_type->area + x;
+				pos[cur_vtx + 2][0] = stat_type->area / 2 + x;
+				pos[cur_vtx + 2][1] = stat_type->area / 2 + y;
 				cur_vtx+=3;
 /*				printf("[%i/%i]:epoch:[%ld,%ld],val:[%Lu,%Lu]",
 				       cur_vtx, num_vertices,
@@ -588,6 +567,8 @@ proc_net_dev_stats(struct wl_list *target_list,long sec, long usec)
 		char stat_type[63];
 		sprintf(stat_type,"iface.%s.rx_bytes",name);
 		printf("proc_net_dev_stats: stat_type is [%s]\n",stat_type);
+		if(strstr(name,"lo"))
+			continue;
 		add_target_stat_value(target_list,local_hostname,stat_type,
 				      sec,usec,rx_bytes);
 	}
