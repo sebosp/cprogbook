@@ -21,7 +21,7 @@ main(int argc, char *argv[])
 		if (id == 0)
 			nthreads = nthrds; 
 		for(i = id; i < num_steps; i+=nthrds){
-			# pragma omp atomic
+			# pragma omp critical
 			{
 			x = (i + 0.5) * step;
 			sum += 4.0/(1.0 + x * x);
