@@ -29,6 +29,7 @@
 
 #ifndef CACHEGRATOR_H
 #define CACHEGRATOR_H
+#define USE_OMP
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -36,6 +37,7 @@
 #include <limits.h>
 #include <wayland-util.h>
 #include <net/if.h>
+#include <omp.h>
 #define _PROC_LOADAVG			"/proc/loadavg"
 #define _PROC_NET_DEV			"/proc/net/dev"
 #define _MAX_ENTRIES			1000
@@ -67,7 +69,8 @@ struct target_stat_types_t{
 	long last_update; /* epoch */
 	int time_res; /* Time resolution of the store, 5mins? 1 hour? etc.*/
 	struct wl_list link;
-	bool enabled;
+	int enabled;
+	int is_delta;
 	struct stat_color color;
 	GLenum draw_style;
 	int div_id;
@@ -133,7 +136,8 @@ print_target_types_json(struct target_stat_types_t *types_list,
 		printf(",\"min_epoch\":\"%ld\"",types_iter->min_epoch);
 		printf(",\"last_update\":\"%ld\"",types_iter->last_update);
 		printf(",\"time_res\":\"%d\"",types_iter->time_res);
-		printf(",\"enabled\":\"%s\"",(types_iter->enabled?"1":"0"));
+		printf(",\"enabled\":\"%i\"",types_iter->enabled);
+		printf(",\"is_delta\":\"%i\"",types_iter->is_delta);
 		printf(",\"color\":\"#%f%f%f\"",types_iter->color.red,
 				types_iter->color.green,
 				types_iter->color.blue
@@ -269,6 +273,7 @@ init_stat_type(char stat_type_name[])
 	new_stat_type->avg_value = 0;
 	new_stat_type->last_update = 0;
 	new_stat_type->time_res = 0;
+	new_stat_type->is_delta = 0;
 	/* TODO: The next vars need criteria. */
 	new_stat_type->enabled = 1;
 	new_stat_type->color.red = 0.0;
@@ -301,7 +306,9 @@ add_target_stat_value(struct wl_list *target_list,
 		char stat_type[], 
 		long sec,
 		long usec,
-		unsigned long long stat_type_value)
+		unsigned long long stat_type_value,
+		int is_delta
+		)
 {
 	/* TODO: On MAX we should remove oldest/unused/check non-displayed */
 	struct target_stats_t *target_loc;
@@ -312,7 +319,7 @@ add_target_stat_value(struct wl_list *target_list,
 	bool should_insert = true;
 	wl_list_for_each(target_loc, target_list, link){
 		if(strcmp(target_loc->name,target) == 0){
-			printf("[A:1]\t%s already exists\n",target);
+			//printf("[A:1]\t%s already exists\n",target);
 			should_insert = false;
 			break;
 		}
@@ -331,7 +338,7 @@ add_target_stat_value(struct wl_list *target_list,
 		should_insert = true;
 		wl_list_for_each(stat_type_loc, &target_loc->types.link, link){
 			if(strcmp(stat_type_loc->name,stat_type) == 0){
-				printf("[A:2]\t%s already exists\n",stat_type);
+				//printf("[A:2]\t%s already exists\n",stat_type);
 				should_insert = false;
 				break;
 			}
@@ -345,6 +352,7 @@ add_target_stat_value(struct wl_list *target_list,
 		stat_type_loc = init_stat_type(stat_type);
 		wl_list_insert(&target_loc->types.link,&stat_type_loc->link);
 	}
+	stat_type_loc->is_delta = is_delta;
 	/* We now have the target host stat type collection, i.e. loadavg */
 	int count = wl_list_length(&target_loc->types.link);
 	if(count > _MAX_ENTRIES){
@@ -359,7 +367,7 @@ add_target_stat_value(struct wl_list *target_list,
 		    sec == stat_val_loc->sec &&
 		    stat_type_value == stat_val_loc->value
 		){ /* Dup removing */
-			printf("[A:3]\t%ld.%ld already exists\n",sec,usec);
+			//printf("[A:3]\t%ld.%ld already exists\n",sec,usec);
 			should_insert = false;
 			break;
 		}
@@ -383,6 +391,18 @@ add_target_stat_value(struct wl_list *target_list,
 	return 0;
 }
 
+#define cmp_upd_min(min,cmp)		\
+	if(min > cmp)			\
+		min = cmp;
+
+#define cmp_upd_max(max,cmp)		\
+	if(max < cmp)			\
+		max = cmp;
+
+#define cmp_upd_min_max(min,max,cmp)	\
+	cmp_upd_min(min,cmp);		\
+	cmp_upd_max(max,cmp);
+
 static void
 target_list_stats(int *num_verts, struct wl_list *target_list,
 		  long *min_epoch,
@@ -392,33 +412,78 @@ target_list_stats(int *num_verts, struct wl_list *target_list,
 		  int div_id, GLenum mode)
 {
 	struct target_stats_t *target_loc;
-	struct target_stat_types_t *stat_type_loc;
-	*num_verts = 0;
-	*min_epoch = LONG_MAX;
-	*min_value = ULONG_MAX;
-	*max_epoch = 0;
-	*max_value = 0;
+	struct target_stat_types_t *st_typ;
+	struct target_stat_type_vals_t *stat;
+	struct target_stat_type_vals_t *stat_nxt;
+	unsigned long long int delta = 0;
+	// local instances of reduced vars
+	long lmin_epoch = LONG_MAX;
+	long lmax_epoch = 0;
+	unsigned long long int lmin_value = ULONG_MAX;
+	unsigned long long int lmax_value = 0;
+	int lnum_verts = 0;
+#ifdef USE_OMP
+	int target_iter = 0;
+	int nthreads;
+#pragma omp parallel \
+	default(none) \
+	firstprivate(target_list,delta,target_iter) \
+	private(target_loc,st_typ,stat,stat_nxt) \
+	shared(nthreads,div_id) \
+	reduction(max:lmax_epoch,lmax_value) \
+	reduction(min:lmin_epoch,lmin_value) \
+	reduction(+:lnum_verts)
+{
+	int tid = omp_get_thread_num();
+	if(tid == 0)
+		nthreads = omp_get_num_threads();
+	// We depend on the above value, let threads sync.
+	#pragma omp barrier
+#endif
 	wl_list_for_each(target_loc, target_list, link){
-		wl_list_for_each(stat_type_loc, &target_loc->types.link, link){
-			if(!stat_type_loc->enabled ||
-			   stat_type_loc->div_id != div_id)
+		wl_list_for_each(st_typ, &target_loc->types.link, link){
+#ifdef USE_OMP
+			target_iter++;
+			if(target_iter % nthreads != tid)
 				continue;
-			if(*max_value < stat_type_loc->max_value)
-				*max_value = stat_type_loc->max_value;
-			if(*min_value > stat_type_loc->min_value)
-				*min_value = stat_type_loc->min_value;
-			if(*max_epoch < stat_type_loc->max_epoch)
-				*max_epoch = stat_type_loc->max_epoch;
-			if(*min_epoch > stat_type_loc->min_epoch)
-				*min_epoch = stat_type_loc->min_epoch;
-			*num_verts += 3 * 
-				wl_list_length(&stat_type_loc->values.link);
+#endif
+			if(!st_typ->enabled ||
+			   st_typ->div_id != div_id)
+				continue;
+			cmp_upd_min(lmin_epoch,st_typ->min_epoch);
+			cmp_upd_max(lmax_epoch,st_typ->max_epoch);
+			if(!st_typ->is_delta){
+				cmp_upd_min(lmin_value,st_typ->min_value);
+				cmp_upd_max(lmax_value,st_typ->max_value);
+				lnum_verts += 3 * 
+					wl_list_length(&st_typ->values.link);
+				continue;
+			}
+			// Would it make sense to multi-thread on delta calc?
+			wl_list_for_each_safe(stat,stat_nxt,
+					 &st_typ->values.link, link){
+				if(stat_nxt->value > stat->value)
+					delta = stat_nxt->value - stat->value;
+				else
+					delta = stat->value - stat_nxt->value;
+				cmp_upd_min(lmin_value,delta);
+				cmp_upd_max(lmax_value,delta);
+				lnum_verts += 3;
+			}
 		}
 	}
+#ifdef USE_OMP
+}
+#endif
+	*min_epoch = lmin_epoch;
+	*min_value = lmin_value;
+	*max_epoch = lmax_epoch;
+	*max_value = lmax_value;
+	*num_verts = lnum_verts;
 }
 
 static void
-gen_stats_vtx_trgl_data(struct wl_list *target_list,
+gen_stats_vtx_trgl_data(struct wl_list *tgt_lst,
 			int num_vertices,
 			GLfloat pos[num_vertices][3],
 			GLfloat col[num_vertices][3],
@@ -433,11 +498,11 @@ gen_stats_vtx_trgl_data(struct wl_list *target_list,
 	int cur_vtx = 0;
 	int i;
 	GLfloat x, y;
-	if(min_value > 0)
-		min_epoch--;
 	max_epoch++;
 	if(min_value > 0)
 		min_value--;
+	if(min_epoch > 0)
+		min_epoch--;
 	max_value++;
 	long tmp_epoch;
 	if(max_epoch < min_epoch){ /* swap vals just in case*/
@@ -445,95 +510,107 @@ gen_stats_vtx_trgl_data(struct wl_list *target_list,
 		min_epoch = max_epoch;
 		max_epoch = tmp_epoch;
 	}
-	unsigned long long tmp_value;
+	unsigned long long tmp_v;
 	if(max_value < min_value){ /* swap vals just in case */
-		tmp_value = min_value;
+		tmp_v= min_value;
 		min_value = max_value;
-		max_value = tmp_value;
+		max_value = tmp_v;
 	}
 	/* Change from (min,max) to (0,max-min), to avoid recalculating. */
 	max_epoch = max_epoch - min_epoch;
 	max_value = max_value - min_value;
 	struct target_stats_t *target;
 	struct target_stat_types_t *stat_type;
-	struct target_stat_type_vals_t *stat_val;
-	wl_list_for_each(target, target_list, link){
+	struct target_stat_type_vals_t *stat;
+	struct target_stat_type_vals_t *stat_nxt;
+	struct stat_color stat_col;
+	int nthreads;
+	int target_iter = 0;
+#ifdef USE_OMP
+	#pragma omp parallel \
+	firstprivate(tgt_lst,min_value,min_epoch,max_value,max_epoch,cur_vtx) \
+	firstprivate(target_iter) \
+	default(none) \
+	private(target,stat_type,stat,stat_nxt,stat_col,x,y,i,tmp_v) \
+	shared(nthreads,col,pos,div_id,num_vertices) 
+{
+	int tid = omp_get_thread_num();
+	if(tid == 0)
+		nthreads = omp_get_num_threads();
+	// We depend on the above value, let threads sync.
+	#pragma omp barrier
+#endif
+	wl_list_for_each(target, tgt_lst, link){
 		wl_list_for_each(stat_type, &target->types.link, link){
 			if(!stat_type->enabled ||
 			   stat_type->div_id != div_id)
 				continue;
-			struct stat_color stat_col = stat_type->color;
-			wl_list_for_each(stat_val,
+			stat_col = stat_type->color;
+			wl_list_for_each_safe(stat, stat_nxt, 
 					 &stat_type->values.link, link){
-				if(cur_vtx + 3 > num_vertices){
-					printf("M:boundary: %i/%i\n",
-					       cur_vtx + 3,
-					       num_vertices);
-					return;
-				}
+				cur_vtx+=3;
+#ifdef USE_OMP
+				target_iter++;
+				if(target_iter % nthreads != tid)
+					continue;
+#endif
 				for(i = 0; i < 3; i++){
-					col[cur_vtx+i][0] = stat_col.red;
-					col[cur_vtx+i][1] = stat_col.green;
-					col[cur_vtx+i][2] = stat_col.blue;
+					col[cur_vtx-3+i][0] = stat_col.red;
+					col[cur_vtx-3+i][1] = stat_col.green;
+					col[cur_vtx-3+i][2] = stat_col.blue;
 				}
 				/* Let's scale values */
 				/* 2 /  = x /
 				 * max    cur*/
-				x = (1.9 * (stat_val->sec - min_epoch)
+				x = (1.9 * (stat->sec - min_epoch)
 					/ max_epoch);
-				y = (1.9 * (stat_val->value - min_value)
-					/ max_value);
+				if(stat_type->is_delta)
+					if(stat_nxt->value > stat->value){
+						tmp_v = stat_nxt->value
+							- stat->value;
+					}else{
+						tmp_v = stat->value
+							- stat_nxt->value;
+					}
+				else
+					tmp_v= stat->value;
+				/* XXX div_id should have offsets and margin */
+				y = 1.9 * (tmp_v - min_value) / max_value;
 				x = x - 0.8;
 				y = y - 0.8;
 				/* Lil triangle */
 				/* Initialize Z to 0 */
-				pos[cur_vtx    ][2] = 0;
-				pos[cur_vtx + 1][2] = 0;
-				pos[cur_vtx + 2][2] = 0;
+				pos[cur_vtx-3    ][2] = 0;
+				pos[cur_vtx-3 + 1][2] = 0;
+				pos[cur_vtx-3 + 2][2] = 0;
 				/* Bottom left */
-				pos[cur_vtx    ][0] = -1 * stat_type->area + x;
-				pos[cur_vtx    ][1] = -1 * stat_type->area + y;
+				pos[cur_vtx-3    ][0] = -1 * stat_type->area + x;
+				pos[cur_vtx-3    ][1] = -1 * stat_type->area + y;
 				/* Bottom right */
-				pos[cur_vtx + 1][0] = stat_type->area + x;
-				pos[cur_vtx + 1][1] = -1 * stat_type->area + y;
+				pos[cur_vtx-3 + 1][0] = stat_type->area + x;
+				pos[cur_vtx-3 + 1][1] = -1 * stat_type->area + y;
 				/* Top center */
-				pos[cur_vtx + 2][0] = stat_type->area / 2 + x;
-				pos[cur_vtx + 2][1] = stat_type->area / 2 + y;
-				cur_vtx+=3;
-/*				printf("[%i/%i]:epoch:[%ld,%ld],val:[%Lu,%Lu]",
-				       cur_vtx, num_vertices,
+				pos[cur_vtx-3 + 2][0] = stat_type->area / 2 + x;
+				pos[cur_vtx-3 + 2][1] = stat_type->area / 2 + y;
+				printf("{%i}[%i/%i]:epoch:[%ld,%ld],val:[%Lu,%Lu]",
+				       tid,cur_vtx, num_vertices,
 				       min_epoch,max_epoch,
 				       min_value,max_value);
-				printf("stat_val->value-min_value %Lu - %Lu\t",
-				       stat_val->value, min_value);
+				printf("val->val-min_val %Lu - %Lu\t",
+				       stat->value, min_value);
 				printf(" -> x:%3.6f\ty:%3.6f\n",x,y);
-				for(i = 0; i < 3; i++){
-					printf("\t{");
-					for(j = 0; j < 3; j++)
-						printf("s %3.6f,",pos[i][j]);
-					printf("}\n");
-				}*/
 			}
 		}
 	}
-/*	pos[0][2] = 0;
-	pos[1][2] = 0;
-	pos[2][2] = 0;
-	pos[0][0] = -0.5; pos[0][1] = -0.5;
-	pos[1][0] =  0.5; pos[1][1] = -0.5;
-	pos[2][0] =  0  ; pos[2][1] =  0.5;
-	Possible use of Z axis for rotating:
-	verts[0][2] = 0-(tv.tv_sec % 10 < 5?
-				     1-((float)(tv.tv_sec%10))/10:
-				     ((float)(tv.tv_sec%10))/10
-		      );
-	verts[1][2] = verts[0][2];
-	verts[2][2] = verts[0][2];*/
+#ifdef USE_OMP
+}
+#endif
 }
 
 static int
 proc_net_dev_stats(struct wl_list *target_list,long sec, long usec)
 {
+	int is_delta = 1; // Interfaces should be delta to calc speed.
 	char local_hostname[64];
 	local_hostname[63] = '\0';
 	gethostname(local_hostname,63);
@@ -563,14 +640,13 @@ proc_net_dev_stats(struct wl_list *target_list,long sec, long usec)
 		}
 		char * separator = strrchr(name,':');
 		*separator = '\0';
-		printf("Got name: [%s] RX bytes: [%Lu]\n",name,rx_bytes);
 		char stat_type[63];
 		sprintf(stat_type,"iface.%s.rx_bytes",name);
 		printf("proc_net_dev_stats: stat_type is [%s]\n",stat_type);
 		if(strstr(name,"lo"))
 			continue;
-		add_target_stat_value(target_list,local_hostname,stat_type,
-				      sec,usec,rx_bytes);
+		add_target_stat_value(target_list, local_hostname, stat_type,
+				      sec, usec, rx_bytes, is_delta);
 	}
 	fclose(fh);
 	return 0;
